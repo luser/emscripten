@@ -7007,7 +7007,6 @@ LibraryManager.library = {
   // ==========================================================================
 #if SOCKET_WEBRTC
   $Sockets__deps: ['__setErrNo', '$ERRNO_CODES',
-    function() { return 'var SocketIO = ' + read('socket.io.js') + ';\n' },
     function() { return 'var Peer = ' + read('wrtcp.js') + ';\n' }],
 #else
   $Sockets__deps: ['__setErrNo', '$ERRNO_CODES'],

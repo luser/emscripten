@@ -1,17 +1,22 @@
 {
   "name": "p2p",
-  "version": "0.0.1-21",
+  "version": "0.1.0",
   "private": true,
   "scripts": {
-    "start": "node broker/p2p-broker.js"
+    "start": "node broker/p2p-broker.js",
+    "install-windows-service": "winser -i",
+    "uninstall-windows-service": "winser -r"
   },
   "dependencies": {
     "lodash": "~1.0.1",
-    "socket.io": "~0.9.13"
+    "forever": "~0.10.0",
+    "ws": "~1.0.1",
+    "uglify-js": "~2.2.5",
+    "winser": "~0.1.3"
   },
   "engines": {
-    "node": "0.8.x",
-    "npm": "1.1.x"
+    "node": "0.12.x",
+    "npm": "2.14.x"
   },
   "subdomain": "wrtcb"
 }
