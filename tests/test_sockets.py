@@ -386,7 +386,7 @@ class sockets(BrowserCore):
     open(os.path.join(self.get_dir(), 'host_pre.js'), 'w').write('''
       var Module = {
         webrtc: {
-          broker: 'http://localhost:8182',
+          broker: 'ws://localhost:8080',
           session: undefined,
           onpeer: function(peer, route) {
             window.open('http://localhost:8888/peer.html?' + route);
@@ -410,7 +410,7 @@ class sockets(BrowserCore):
     open(os.path.join(self.get_dir(), 'peer_pre.js'), 'w').write('''
       var Module = {
         webrtc: {
-          broker: 'http://localhost:8182',
+          broker: 'ws://localhost:8080',
           session: window.location.toString().split('?')[1],
           onpeer: function(peer, route) {
             peer.connect(Module['webrtc']['session']);
@@ -432,7 +432,7 @@ class sockets(BrowserCore):
     Popen([PYTHON, EMCC, temp_peer_filepath, '-o', peer_outfile] + ['-s', 'GL_TESTING=1', '--pre-js', 'peer_pre.js', '-s', 'SOCKET_WEBRTC=1', '-s', 'SOCKET_DEBUG=1']).communicate()
 
     # note: you may need to run this manually yourself, if npm is not in the path, or if you need a version that is not in the path
-    Popen(['npm', 'install', path_from_root('tests', 'sockets', 'p2p')]).communicate()
+    Popen(['npm', 'install'], cwd=path_from_root('tests', 'sockets', 'p2p')).communicate()
     broker = Popen(NODE_JS + [path_from_root('tests', 'sockets', 'p2p', 'broker', 'p2p-broker.js')])
 
     expected = '1'

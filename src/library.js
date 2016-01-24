@@ -6631,6 +6631,9 @@ LibraryManager.library = {
   gethostbyname__deps: ['$DNS', '_inet_pton4_raw'],
   gethostbyname: function(name) {
     name = Pointer_stringify(name);
+#if SOCKET_DEBUG
+    Module.print('gethostbyname(' + name + ')');
+#endif
 
     // generate hostent
     var ret = _malloc({{{ C_STRUCTS.hostent.__size__ }}}); // XXX possibly leaked, as are others here
@@ -6648,6 +6651,9 @@ LibraryManager.library = {
     {{{ makeSetValue('addrListBuf', '4', '0', 'i32*') }}};
     {{{ makeSetValue('addrListBuf', '8', '__inet_pton4_raw(DNS.lookup_name(name))', 'i32') }}};
     {{{ makeSetValue('ret', C_STRUCTS.hostent.h_addr_list, 'addrListBuf', 'i8**') }}};
+#if SOCKET_DEBUG
+    Module.print('gethostbyname(' + name + ') -> ' + DNS.lookup_name(name));
+#endif
     return ret;
   },
 
@@ -7007,7 +7013,6 @@ LibraryManager.library = {
   // ==========================================================================
 #if SOCKET_WEBRTC
   $Sockets__deps: ['__setErrNo', '$ERRNO_CODES',
-    function() { return 'var SocketIO = ' + read('socket.io.js') + ';\n' },
     function() { return 'var Peer = ' + read('wrtcp.js') + ';\n' }],
 #else
   $Sockets__deps: ['__setErrNo', '$ERRNO_CODES'],
@@ -7026,44 +7031,9 @@ LibraryManager.library = {
     localAddr: 0xfe00000a, // Local address is always 10.0.0.254
     addrPool: [            0x0200000a, 0x0300000a, 0x0400000a, 0x0500000a,
                0x0600000a, 0x0700000a, 0x0800000a, 0x0900000a, 0x0a00000a,
-               0x0b00000a, 0x0c00000a, 0x0d00000a, 0x0e00000a] /* 0x0100000a is reserved */
-  },
-
-#if SOCKET_WEBRTC
-  /* WebRTC sockets supports several options on the Module object.
-
-     * Module['host']: true if this peer is hosting, false otherwise
-     * Module['webrtc']['broker']: hostname for the p2p broker that this peer should use
-     * Module['webrtc']['session']: p2p session for that this peer will join, or undefined if this peer is hosting
-     * Module['webrtc']['hostOptions']: options to pass into p2p library if this peer is hosting
-     * Module['webrtc']['onpeer']: function(peer, route), invoked when this peer is ready to connect
-     * Module['webrtc']['onconnect']: function(peer), invoked when a new peer connection is ready
-     * Module['webrtc']['ondisconnect']: function(peer), invoked when an existing connection is closed
-     * Module['webrtc']['onerror']: function(error), invoked when an error occurs
-   */
-  socket__deps: ['$FS', '$Sockets'],
-  socket: function(family, type, protocol) {
-#if USE_PTHREADS
-    if (ENVIRONMENT_IS_PTHREAD) return _emscripten_sync_run_in_main_thread_3({{{ cDefine('EM_PROXIED_SOCKET') }}}, family, type, protocol);
-#endif
-    var INCOMING_QUEUE_LENGTH = 64;
-    var info = FS.createStream({
-      addr: null,
-      port: null,
-      inQueue: new CircularBuffer(INCOMING_QUEUE_LENGTH),
-      header: new Uint16Array(2),
-      bound: false,
-      socket: true,
-      stream_ops: {}
-    });
-    assert(info.fd < 64); // select() assumes socket fd values are in 0..63
-    var stream = type == {{{ cDefine('SOCK_STREAM') }}};
-    if (protocol) {
-      assert(stream == (protocol == {{{ cDefine('IPPROTO_TCP') }}})); // if stream, must be tcp
-    }
-
-    // Open the peer connection if we don't have it already
-    if (null == Sockets.peer) {
+               0x0b00000a, 0x0c00000a, 0x0d00000a, 0x0e00000a], /* 0x0100000a is reserved */
+    // This can be called on startup to init the peer connection ahead of time.
+    connectPeer: function() {
       var host = Module['host'];
       var broker = Module['webrtc']['broker'];
       var session = Module['webrtc']['session'];
@@ -7104,7 +7074,7 @@ LibraryManager.library = {
           if ('unreliable' === label) {
             handleMessage(addr, message.data);
           }
-        }
+        };
 
         if (Module['webrtc']['onconnect'] && 'function' === typeof Module['webrtc']['onconnect']) {
           Module['webrtc']['onconnect'](peer);
@@ -7117,8 +7087,8 @@ LibraryManager.library = {
         console.error(error);
       };
       peer.onroute = function peer_onroute(route) {
-        if (Module['webrtc']['onpeer'] && 'function' === typeof Module['webrtc']['onpeer']) {
-          Module['webrtc']['onpeer'](peer, route);
+        if (Module['webrtc']['onroute'] && 'function' === typeof Module['webrtc']['onroute']) {
+          Module['webrtc']['onroute'](peer, route);
         }
       };
       function handleMessage(addr, message) {
@@ -7132,15 +7102,41 @@ LibraryManager.library = {
           console.log("unable to deliver message: ", addr, header[1], message);
         }
       }
+      Sockets.handleMessage = handleMessage;
       window.onbeforeunload = function window_onbeforeunload() {
         var ids = Object.keys(Sockets.connections);
         ids.forEach(function(id) {
           Sockets.connections[id].close();
         });
-      }
+      };
       Sockets.peer = peer;
+      if (Module['webrtc']['onpeer'] && 'function' === typeof Module['webrtc']['onpeer']) {
+        Module['webrtc']['onpeer'](peer);
+      }
     }
+  },
 
+#if SOCKET_WEBRTC
+  /* WebRTC sockets supports several options on the Module object.
+
+     * Module['host']: true if this peer is hosting, false otherwise
+     * Module['webrtc']['broker']: hostname for the p2p broker that this peer should use
+     * Module['webrtc']['session']: p2p session for that this peer will join, or undefined if this peer is hosting
+     * Module['webrtc']['hostOptions']: options to pass into p2p library if this peer is hosting
+     * Module['webrtc']['onpeer']: function(peer), invoked when the local peer is created
+     * Module['webrtc']['onroute']: function(peer, route), invoked when this peer is ready to connect
+     * Module['webrtc']['onconnect']: function(peer), invoked when a new peer connection is ready
+     * Module['webrtc']['ondisconnect']: function(peer), invoked when an existing connection is closed
+     * Module['webrtc']['onerror']: function(error), invoked when an error occurs
+   */
+  socket__deps: ['$FS', '$Sockets'],
+  socket: function(family, type, protocol) {
+#if SOCKET_DEBUG
+    Module.print('socket(' + family + ', ' + type + ', ' + protocol + ')');
+#endif
+#if USE_PTHREADS
+    if (ENVIRONMENT_IS_PTHREAD) return _emscripten_sync_run_in_main_thread_3({{{ cDefine('EM_PROXIED_SOCKET') }}}, family, type, protocol);
+#endif
     function CircularBuffer(max_length) {
       var buffer = new Array(++ max_length);
       var head = 0;
@@ -7168,7 +7164,28 @@ LibraryManager.library = {
           return length;
         }
       };
-    };
+    }
+    var INCOMING_QUEUE_LENGTH = 64;
+    var info = FS.createStream({
+      addr: null,
+      family: family,
+      port: null,
+      inQueue: new CircularBuffer(INCOMING_QUEUE_LENGTH),
+      header: new Uint16Array(2),
+      bound: false,
+      socket: true,
+      stream_ops: {}
+    });
+    assert(info.fd < 64); // select() assumes socket fd values are in 0..63
+    var stream = type == {{{ cDefine('SOCK_STREAM') }}};
+    if (protocol) {
+      assert(stream == (protocol == {{{ cDefine('IPPROTO_TCP') }}})); // if stream, must be tcp
+    }
+
+    // Open the peer connection if we don't have it already
+    if (null == Sockets.peer) {
+      Sockets.connectPeer();
+    }
     return info.fd;
   },
 
@@ -7185,11 +7202,17 @@ LibraryManager.library = {
   },
 
   connect: function() {
+#if SOCKET_DEBUG
+    Module.print('connect()');
+#endif
     // Stub: connection-oriented sockets are not supported yet.
   },
 
   bind__deps: ['$FS', '$Sockets', '_inet_ntop4_raw', 'ntohs', 'mkport'],
   bind: function(fd, addr, addrlen) {
+#if SOCKET_DEBUG
+    Module.print('bind(' + fd + ', ' + addr + ', ' + addrlen + ')');
+#endif
 #if USE_PTHREADS
     if (ENVIRONMENT_IS_PTHREAD) return _emscripten_sync_run_in_main_thread_3({{{ cDefine('EM_PROXIED_BIND') }}}, fd, addr, addrlen);
 #endif
@@ -7203,6 +7226,9 @@ LibraryManager.library = {
       info.port = _mkport();
     }
     info.addr = Sockets.localAddr; // 10.0.0.254
+    var addr_s = __inet_ntop4_raw(info.addr);
+    DNS.address_map.names[addr_s] = "localhost";
+    DNS.address_map.addrs["localhost"] = addr_s;
     info.host = __inet_ntop4_raw(info.addr);
     info.close = function info_close() {
       Sockets.portmap[info.port] = undefined;
@@ -7214,6 +7240,9 @@ LibraryManager.library = {
 
   sendmsg__deps: ['$FS', '$Sockets', 'bind', '_inet_ntop4_raw', 'ntohs'],
   sendmsg: function(fd, msg, flags) {
+#if SOCKET_DEBUG
+    Module.print('sendmsg(' + fd + ', ' + msg + ', ' + flags + ')');
+#endif
 #if USE_PTHREADS
     if (ENVIRONMENT_IS_PTHREAD) return _emscripten_sync_run_in_main_thread_3({{{ cDefine('EM_PROXIED_SENDMSG') }}}, fd, msg, flags);
 #endif
@@ -7232,6 +7261,9 @@ LibraryManager.library = {
     // var host = __inet_ntop4_raw(addr);
 
     if (!(connection && connection.connected)) {
+#if SOCKET_DEBUG
+    Module.print('sendmsg(' + fd + '): not connected to addr ' + __inet_ntop4_raw(addr));
+#endif
       ___setErrNo(ERRNO_CODES.EWOULDBLOCK);
       return -1;
     }
@@ -7272,8 +7304,71 @@ LibraryManager.library = {
     return ret;
   },
 
+  sendto__deps: ['$FS', '$Sockets', 'bind', '_inet_ntop4_raw', 'ntohs'],
+  sendto: function(fd, message, length, flags, dest_addr, dest_len) {
+#if SOCKET_DEBUG
+    Module.print('sendto(' + fd + ', ' + message + ', ' + length + ', ' + flags + ', ' + dest_addr + ', ' + dest_len + ')');
+#endif
+#if USE_PTHREADS
+    if (ENVIRONMENT_IS_PTHREAD) return _emscripten_sync_run_in_main_thread_6({{{ cDefine('EM_PROXIED_SENDTO') }}}, fd, message, length, flags, dest_addr, dest_len);
+#endif
+    var info = FS.getStream(fd);
+    if (!info) {
+#if SOCKET_DEBUG
+    Module.print('sendto(' + fd + '): bad fd');
+#endif
+      return -1;
+    }
+    // if we are not connected, use the address info in dest_addr
+    if (!info.bound) {
+      _bind(fd);
+    }
+
+    var port = _ntohs(getValue(dest_addr + {{{ C_STRUCTS.sockaddr_in.sin_port }}}, 'i16'));
+    var addr = {{{ makeGetValue('dest_addr', C_STRUCTS.sockaddr_in.sin_addr.s_addr, 'i32', false, true) }}};
+
+    var connection = null;
+#if SOCKET_DEBUG
+    Module.print('sendto(' + fd + '): addr: ' + addr);
+#endif
+    if (addr == Sockets.localAddr) {
+      // localhost
+    } else {
+      connection = Sockets.connections[addr];
+      if (!(connection && connection.connected)) {
+#if SOCKET_DEBUG
+        Module.print('sendto(' + fd + '): not connected to addr ' + __inet_ntop4_raw(addr));
+#endif
+        ___setErrNo(ERRNO_CODES.EWOULDBLOCK);
+        return -1;
+      }
+    }
+    var ret = 0;
+    var data = new Uint8Array(length);
+    data.set(HEAPU8.subarray(message, message+length), ret);
+    info.header[0] = info.port; // src port
+    info.header[1] = port; // dst port
+    var buffer = new Uint8Array(info.header.byteLength + data.byteLength);
+    buffer.set(new Uint8Array(info.header.buffer));
+    buffer.set(data, info.header.byteLength);
+#if SOCKET_DEBUG
+    Module.print('sendto port: ' + info.header[0] + ' -> ' + info.header[1]);
+    Module.print('sendto bytes: ' + data.length + ' | ' + Array.prototype.slice.call(data));
+#endif
+    if (connection == null) {
+      Sockets.handleMessage(Sockets.localAddr, buffer.buffer);
+    } else {
+      //XXX: this should pick the right one of reliable/unreliable
+      connection.send('unreliable', buffer.buffer);
+    }
+    return ret;
+  },
+
   recvmsg__deps: ['$FS', '$Sockets', 'bind', '__setErrNo', '$ERRNO_CODES', 'htons'],
   recvmsg: function(fd, msg, flags) {
+#if SOCKET_DEBUG
+    Module.print('recvmsg(' + fd + ', ' + msg + ', ' + flags + ')');
+#endif
 #if USE_PTHREADS
     if (ENVIRONMENT_IS_PTHREAD) return _emscripten_sync_run_in_main_thread_3({{{ cDefine('EM_PROXIED_RECVMSG') }}}, fd, msg, flags);
 #endif
@@ -7327,8 +7422,54 @@ LibraryManager.library = {
     return ret;
   },
 
+  recvfrom__deps: ['$FS', '$Sockets', 'bind', '__setErrNo', '$ERRNO_CODES', '_write_sockaddr'],
+  recvfrom: function(fd, buf, len, flags, addr, addr_len) {
+#if SOCKET_DEBUG
+    Module.print('recvfrom(' + fd + ', ' + buf + ', ' + len + ', ' + flags + ', ' + addr + ', ' + addr_len + ')');
+#endif
+#if USE_PTHREADS
+    if (ENVIRONMENT_IS_PTHREAD) return _emscripten_sync_run_in_main_thread_6({{{ cDefine('EM_PROXIED_RECVFROM') }}}, fd, buf, len, flags, addr, addrlen);
+#endif
+    var info = FS.getStream(fd);
+    if (!info) return -1;
+
+    if (!info.port) {
+      console.log('recvfrom on unbound socket');
+      assert(false, 'cannot receive on unbound socket');
+    }
+    if (info.inQueue.length() == 0) {
+      ___setErrNo(ERRNO_CODES.EWOULDBLOCK);
+      return -1;
+    }
+
+    var entry = info.inQueue.shift();
+    var from_addr = entry[0];
+    var message = entry[1];
+    var header = new Uint16Array(message, 0, info.header.length);
+    var buffer = new Uint8Array(message, info.header.byteLength);
+
+    var bytes = buffer.length;
+#if SOCKET_DEBUG
+    Module.print('recvfrom port: ' + header[1] + ' <- ' + header[0]);
+    Module.print('recvfrom bytes: ' + bytes + ' | ' + Array.prototype.slice.call(buffer));
+#endif
+    if (addr) {
+      var res = __write_sockaddr(addr, info.family, from_addr, header[0]);
+      assert(!res.errno);
+    }
+    var bytesRead = Math.min(len, bytes);
+    HEAPU8.set(buffer.subarray(0, bytesRead), buf);
+#if SOCKET_DEBUG
+    Module.print('recvfrom read: ' + bytesRead + ' bytes from ' + __inet_ntop4_raw(from_addr));
+#endif
+    return bytesRead;
+  },
+
   shutdown__deps: ['$FS'],
   shutdown: function(fd, how) {
+#if SOCKET_DEBUG
+    Module.print('shutdown(' + fd + ', ' + how + ')');
+#endif
 #if USE_PTHREADS
     if (ENVIRONMENT_IS_PTHREAD) return _emscripten_sync_run_in_main_thread_2({{{ cDefine('EM_PROXIED_SHUTDOWN') }}}, fd, how);
 #endif
@@ -7340,6 +7481,9 @@ LibraryManager.library = {
 
   ioctl__deps: ['$FS'],
   ioctl: function(fd, request, varargs) {
+#if SOCKET_DEBUG
+    Module.print('ioctl(' + fd + ', ' + request + ', ...)');
+#endif
 #if USE_PTHREADS
     if (ENVIRONMENT_IS_PTHREAD) return _emscripten_sync_run_in_main_thread_3({{{ cDefine('EM_PROXIED_IOCTL') }}}, fd, request, varargs);
 #endif
@@ -7434,6 +7578,57 @@ LibraryManager.library = {
       return -1;
     } else {
       return totalHandles;
+    }
+  },
+
+  _write_sockaddr__deps: ['$Sockets'],
+  _write_sockaddr: function (sa, family, addr, port) {
+    switch (family) {
+      case {{{ cDefine('AF_INET') }}}:
+        {{{ makeSetValue('sa', C_STRUCTS.sockaddr_in.sin_family, 'family', 'i16') }}};
+        {{{ makeSetValue('sa', C_STRUCTS.sockaddr_in.sin_addr.s_addr, 'addr', 'i32') }}};
+        {{{ makeSetValue('sa', C_STRUCTS.sockaddr_in.sin_port, '_htons(port)', 'i16') }}};
+        break;
+      case {{{ cDefine('AF_INET6') }}}:
+        {{{ makeSetValue('sa', C_STRUCTS.sockaddr_in6.sin6_family, 'family', 'i32') }}};
+        {{{ makeSetValue('sa', C_STRUCTS.sockaddr_in6.sin6_addr.__in6_union.__s6_addr+0, 'addr[0]', 'i32') }}};
+        {{{ makeSetValue('sa', C_STRUCTS.sockaddr_in6.sin6_addr.__in6_union.__s6_addr+4, 'addr[1]', 'i32') }}};
+        {{{ makeSetValue('sa', C_STRUCTS.sockaddr_in6.sin6_addr.__in6_union.__s6_addr+8, 'addr[2]', 'i32') }}};
+        {{{ makeSetValue('sa', C_STRUCTS.sockaddr_in6.sin6_addr.__in6_union.__s6_addr+12, 'addr[3]', 'i32') }}};
+        {{{ makeSetValue('sa', C_STRUCTS.sockaddr_in6.sin6_port, '_htons(port)', 'i16') }}};
+        {{{ makeSetValue('sa', C_STRUCTS.sockaddr_in6.sin6_flowinfo, '0', 'i32') }}};
+        {{{ makeSetValue('sa', C_STRUCTS.sockaddr_in6.sin6_scope_id, '0', 'i32') }}};
+        break;
+      default:
+        return { errno: ERRNO_CODES.EAFNOSUPPORT };
+    }
+    // kind of lame, but let's match _read_sockaddr's interface
+    return {};
+  },
+
+  getsockname__deps: ['$FS', '$DNS', '$ERRNO_CODES', '__setErrNo', '_write_sockaddr'],
+  getsockname: function (fd, addr, addrlen) {
+#if SOCKET_DEBUG
+    Module.print('getsockname(' + fd + ', ' + addr + ', ' + addrlen + ')');
+#endif
+#if USE_PTHREADS
+    if (ENVIRONMENT_IS_PTHREAD) return _emscripten_sync_run_in_main_thread_3({{{ cDefine('EM_PROXIED_GETSOCKNAME') }}}, fd, addr, addrlen);
+#endif
+    var info = FS.getStream(fd);
+    if (!info) {
+      ___setErrNo(ERRNO_CODES.EBADF);
+      return -1;
+    }
+    try {
+      var res = __write_sockaddr(addr, info.family, info.addr, info.port);
+      assert(!res.errno);
+#if SOCKET_DEBUG
+      Module.print('getsockname(' + fd + ') -> ' + __inet_ntop4_raw(info.addr));
+#endif
+      return 0;
+    } catch (e) {
+      FS.handleFSError(e);
+      return -1;
     }
   },
 #else
